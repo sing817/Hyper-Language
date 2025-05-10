@@ -1,7 +1,6 @@
 ## 🌍 Language
 - [English](README.md)
 - [中文](README_zh.md)
-- [日本語](README_jp.md)
 
 # 超語言（Hyper Language, HL）— 高密度 NLP 表示法
 
