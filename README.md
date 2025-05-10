@@ -1,3 +1,8 @@
+## 🌍 Language
+- [English](README.md)
+- [中文](README_zh.md)
+- [日本語](README_jp.md)
+- 
 # Hyper Language (HL) - A High-Density NLP Representation
 
 ## 📌 Introduction
