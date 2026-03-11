@@ -6,3 +6,4 @@ tqdm
 numpy
 tiktoken
 accelerate  # for low_cpu_mem_usage
+jieba
