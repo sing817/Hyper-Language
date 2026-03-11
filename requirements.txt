@@ -1,0 +1,8 @@
+torch
+transformers
+datasets
+wandb
+tqdm
+numpy
+tiktoken
+accelerate  # for low_cpu_mem_usage
