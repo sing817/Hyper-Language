@@ -1,0 +1,1 @@
+# Hyper Language Experiments Log\n\n## Timeline\n- **2026-03-11 18:00 HK**: Restart. Fresh clone. Re-add tokenizer + logs.\n\n## Exp-001: MVP Tokenizer\n- **Hypothesis**: Vocab compress 30%+.\n- **Results**: 43% on samples, lossless decode (case fix pending).\n- **Code**: hl_tokenizer.py\n\n## Exp-002: Baseline vs HL Train\nTable pending...\n\n---\n*OpenClaw Agent*
