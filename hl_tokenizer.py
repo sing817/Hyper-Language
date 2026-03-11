@@ -1,76 +1,140 @@
 import re
+import json
 from collections import Counter, defaultdict
 from typing import Dict, List
 import hashlib
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from tqdm import tqdm
+import string
 
 class HLTokenizer:
     def __init__(self, vocab_size: int = 10000):
-        self.hl_vocab: Dict[str, str] = {}  # lower_word → [HLxxx]
-        self.reverse_hl: Dict[str, str] = {}  # [HLxxx] → rep_word (abstract rep)
+        self.hl_vocab: Dict[str, str] = {}
+        self.variant_rev: Dict[str, str] = {}
+        self.zh_bases: set[str] = set()
         self.vocab_size = vocab_size
-        self.hl_counter = 1
-        self.concepts = self._init_concepts()  # 原創: 多 lang → 抽象概念 ID
-        self.hash_fallback = True  # 罕見 hash ID
+        self.concepts = self._init_concepts()
+        self.hash_fallback = True
+        self._load_models()
+
+    def _load_models(self):
+        print("Hyper-Language Tokenizer v2: zh self-ID [HL你好], variants [HL你好:en]")
+
+    def _guess_lang(self, w: str) -> str:
+        w = w.lower()
+        if len(w) < 2:
+            return 'unk'
+        if re.match(r'^[a-z]+$', w):
+            return 'en'
+        if re.search(r'[\u3040-\u30ff\u31f0-\u31ff]', w):
+            return 'ja'
+        if re.search(r'[àâäéèêëîïôöùûüÿçñ]', w):
+            return 'fr'
+        if re.search(r'[áéíóúñ]', w):
+            return 'es'
+        if re.match(r'^[\u4e00-\u9fff]+$', w):
+            return 'zh'
+        return 'unk'
+
+    def _is_non_zh(self, word: str) -> bool:
+        return not bool(re.search(r'[\u4e00-\u9fff]', word))
 
     def _init_concepts(self) -> Dict[str, List[str]]:
-        # 原創共享: 概念 → multi-lang words (手動/後 auto cluster)
         return {
-            'fruit_apple': ['apple', '蘋果', 'pomme', 'りんご', 'apfel'],
-            'world': ['world', '世界', 'monde', '世界', 'welt'],
-            'hello': ['hello', '你好', 'bonjour', 'こんにちは'],
-            'dog': ['dog', '狗', 'chien', '犬', 'hund'],
-            'quick': ['quick', '快速', 'rapide', '速い'],
-            'brown': ['brown', '棕色', 'brun', '茶色'],
-            'fox': ['fox', '狐狸', 'renard', '狐'],
-            'lazy': ['lazy', '懶', 'paresseux', '怠惰'],
-            'jump': ['jumps', '跳', 'saute', '飛び越える'],
-            'garden': ['garden', '花園', 'jardin', '庭'],
-            # 加更多 (WordNet + Translate, 1k 易)
+            'apple': ['苹果', 'apple', 'pomme', 'りんご', 'apfel'],
+            'world': ['世界', 'world', 'monde', 'welt'],
+            'hello': ['你好', 'hello', 'bonjour', 'こんにちは', 'hola'],
+            'dog': ['狗', 'dog', 'chien', '犬', 'hund', 'perro'],
+            'fox': ['狐狸', 'fox'],
+            'jump': ['跳', 'jumps', 'jump', '跳跃'],
+            'brown': ['棕色', 'brown'],
+            'quick': ['快速', 'quick'],
+            'lazy': ['懒惰', 'lazy'],
         }
 
     def _tokenize_cross(self, text: str) -> List[str]:
+        text = re.sub(r'[。！？，。!?;:\\' + string.punctuation + ']', ' ', text)
         if re.search(r'[\u4e00-\u9fff]', text):
             import jieba
-            return jieba.lcut(text)
-        return re.findall(r'\b\w+\b', text)
+            raw_words = jieba.lcut(text)
+        else:
+            raw_words = re.findall(r'\b\w+\b', text)
+        words = []
+        for w in raw_words:
+            if len(w) <= 1 or w.isspace():
+                continue
+            if self._is_non_zh(w):
+                words.append(w.lower())
+            else:
+                words.append(w)
+        return words
+
+    def _translate_batch(self, words: List[str]) -> Dict[str, str]:
+        return {w: w for w in words}  # pivot self
 
     def build_vocab(self, texts: List[str]):
-        # 1. 原創共享: concepts 先 assign
-        for concept, words in self.concepts.items():
-            token = f'[HL{self.hl_counter:03d}]'
+        print("Building v2 vocab...")
+        # Manual
+        for _, words in self.concepts.items():
+            zh_words = [w for w in words if self._guess_lang(w) == 'zh']
+            zh_rep = zh_words[0] if zh_words else words[0]
+            token = f'[HL{zh_rep}]'
+            self.zh_bases.add(zh_rep)
+            self.hl_vocab[zh_rep] = token
             for w in words:
-                self.hl_vocab[w.lower()] = token
-            self.reverse_hl[token] = concept  # abstract rep
-            self.hl_counter += 1
-            print(f'Shared concept {concept}: {words} → {token}')
+                if self._guess_lang(w) == 'zh':
+                    continue
+                lang = self._guess_lang(w)
+                if lang == 'unk':
+                    continue
+                vtoken = f'[HL{zh_rep}:{lang}]'
+                self.variant_rev[vtoken] = w
+                self.hl_vocab[w] = vtoken
 
-        # 2. 剩餘 freq top (global tokenize)
         all_words = []
-        for text in texts:
+        for text in tqdm(texts, desc="Candidates"):
             words = self._tokenize_cross(text)
-            all_words.extend([w for w in words if w.lower() not in self.hl_vocab and len(w) > 1])
-        counts = Counter(w.lower() for w in all_words)
-        top_remaining = counts.most_common(self.vocab_size - self.hl_counter)
+            all_words.extend(words)
 
-        for w_lower, _ in top_remaining:
-            if self.hl_counter > self.vocab_size: break
-            token = f'[HL{self.hl_counter:03d}]'
-            self.hl_vocab[w_lower] = token
-            self.reverse_hl[token] = all_words[all_words.index(w_lower)] if w_lower in all_words else w_lower
-            self.hl_counter += 1
+        unique_words = [w for w in set(all_words) if w not in self.hl_vocab]
+        non_zh_words = [w for w in unique_words if self._is_non_zh(w)]
+        print(f"New: {len(non_zh_words)} non-zh / {len(unique_words)}")
+        zh_map = {w: w for w in unique_words if not self._is_non_zh(w)}
+        for i in tqdm(range(0, len(non_zh_words), 5), desc="Pivot"):
+            batch = non_zh_words[i:i+20]
+            zh_map.update(self._translate_batch(batch))
 
-        # 3. 罕見 hash fallback (optional)
-        print(f"Built {len(self.hl_vocab)} HL IDs (concepts + freq)")
+        zh_counts = Counter(zh_map[w] for w in unique_words)
+        top_zh = zh_counts.most_common(self.vocab_size)
+
+        for zh_rep, _ in top_zh:
+            if len(self.zh_bases) >= self.vocab_size:
+                break
+            if zh_rep in self.zh_bases:
+                continue
+            self.zh_bases.add(zh_rep)
+            token = f'[HL{zh_rep}]'
+            self.hl_vocab[zh_rep] = token
+            matching_orig = [w for w in unique_words if zh_map[w] == zh_rep]
+            for w in matching_orig:
+                lang = self._guess_lang(w)
+                if lang == 'zh' or lang == 'unk':
+                    self.hl_vocab[w] = token
+                else:
+                    vtoken = f'[HL{zh_rep}:{lang}]'
+                    self.variant_rev[vtoken] = w
+                    self.hl_vocab[w] = vtoken
+
+        print(f"Vocab: {len(self.zh_bases)} zh bases, {len(self.hl_vocab)} entries")
 
     def encode(self, text: str) -> str:
         words = self._tokenize_cross(text)
         hl_words = []
         for w in words:
-            w_lower = w.lower()
-            token = self.hl_vocab.get(w_lower)
+            token = self.hl_vocab.get(w)
             if not token and self.hash_fallback:
-                h = hashlib.md5(w_lower.encode()).hexdigest()[:4]
-                token = f'[H{h}]'  # short hash
+                h = hashlib.md5(w.encode()).hexdigest()[:4]
+                token = f'[H{h}]'
             hl_words.append(token or w)
         return ' '.join(hl_words)
 
@@ -78,33 +142,40 @@ class HLTokenizer:
         words = hl_text.split()
         decoded = []
         for w in words:
-            if w.startswith('[HL') or w.startswith('[H'):
-                rep = self.reverse_hl.get(w, w)
-                decoded.append(rep)
+            m = re.match(r'\[HL([^\]:]+)(?::([a-z]{2}))?\]', w)
+            if m:
+                base = m.group(1)
+                lang = m.group(2)
+                if lang and w in self.variant_rev:
+                    decoded.append(self.variant_rev[w])
+                else:
+                    decoded.append(base)
+            elif w.startswith('[H'):
+                decoded.append(w)
             else:
                 decoded.append(w)
-        return ' '.join(decoded)  # space for readability
+        return re.sub(r' +', ' ', ' '.join(decoded)).strip()
 
     def compress_ratio(self, orig: str, compressed: str) -> float:
-        orig_words = len(re.findall(r'\b\w+\b|[\u4e00-\u9fff]+', orig))
-        comp_hl = sum(1 for w in compressed.split() if w.startswith('[H'))
-        return (orig_words - comp_hl) / orig_words if orig_words else 1.0  # HL count as save
+        orig_words = len(self._tokenize_cross(orig))
+        comp_hl = sum(1 for w in compressed.split() if w.startswith('[HL'))
+        return (orig_words - comp_hl) / orig_words if orig_words else 1.0
 
 if __name__ == '__main__':
-    tokenizer = HLTokenizer(vocab_size=50)
+    tokenizer = HLTokenizer(vocab_size=200)
     samples = [
-        "Hello world apple. 你好世界 蘋果。",
-        "The quick brown fox jumps over the lazy dog. 快速棕狐狸跳過懶狗。",
-        "Pomme rouge dans le jardin. Bonjour chien.",
-        "速い茶色の狐が怠惰な犬を飛び越える。りんご。"
+        "你好世界 蘋果。Hello world apple. ",
+        "快速棕色狐狸跳過懶狗。The quick brown fox jumps over the lazy dog.",
+        "Pomme bonjour chien.",
+        "速い狐犬りんご。"
     ]
     tokenizer.build_vocab(samples)
     print("Vocab sample:", list(tokenizer.hl_vocab.items())[:10])
     for text in samples:
-        orig_len = len(re.findall(r'\b\w+\b|[\u4e00-\u9fff]+', text))
+        orig_len = len(tokenizer._tokenize_cross(text))
         comp = tokenizer.encode(text)
         ratio = tokenizer.compress_ratio(text, comp)
         decoded = tokenizer.decode(comp)
-        print(f"\nOrig ({orig_len}): {text}")
+        print(f"\\nOrig ({orig_len}): {text}")
         print(f"HL: {comp} (ratio: {ratio:.2f})")
         print(f"Decoded: {decoded}")
