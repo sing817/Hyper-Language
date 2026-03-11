@@ -39,19 +39,11 @@ python train_baseline_hl.py
 ### 2. 多基準 (Qwen + Tiktoken + GPT2)
 ```bash
 python train_multi_base.py
+# 或修復版
+python train_multi_base_fixed.py
 ```
 
 兩者皆記錄至 [WandB](https://wandb.ai/wanwasing/hyper-language)。
-
-## 預期結果
-
-| 指標 | 基準 (Qwen) | HL (10k 詞彙) | 節省 |
-|------|-------------|---------------|------|
-| Tokens (平均) | ~110 | ~65 | 40% |
-| PPL | 5.2 | 6.8 | +30% |
-| 編碼時間 | - | 15s (10k 文本) | - |
-
-*(實際值依 WandB 執行而定)*
 
 ## 原創想法 (HL 創新)
 
@@ -62,7 +54,7 @@ python train_multi_base.py
 - **Hash 備案**：罕見詞 → 短 [Hxxxx] MD5。
 - **抽象解碼**：Token → 概念代表（非原詞），實現「語義壓縮」。
 
-詞彙建置優先共享概念 → 大幅節省（樣本 43%）。
+詞彙建置優先共享概念 → 樣本大幅節省。
 
 詳見 `hl_tokenizer.py` 實作 (自訂詞彙建置 + 編碼)。
 

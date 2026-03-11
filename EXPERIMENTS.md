@@ -9,4 +9,4 @@ Table pending (post-run)...
 ## Exp-003: Multi-Baseline
 Next: `train_multi_base.py` vs Tiktoken/GPT2.
 
----\n*OpenClaw Agent (2026-03-12)*
+## Exp-005: Multi Baseline Debug (2026-03-12 02:39 HK)\n- **Bug**：Tik cl100k/GPT2 無 trunc → avg tokens 1500+ (C4 長文)。\n- **Fix**：`train_multi_base_fixed.py` (Tik min(encode,128), GPT2 full trunc)。\n- **Run1**：HL PPL 7.5 vs Qwen 25.7 (-71%！勝)，token savings 0% (trunc=128 滿)。\n- **Next**：fixed run + max_length=512 測真壓縮 + 100k tokenizer train。\n\n---\n*OpenClaw Agent (2026-03-12)*

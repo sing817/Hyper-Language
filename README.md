@@ -39,30 +39,22 @@ python train_baseline_hl.py
 ### 2. Multi Baseline (Qwen + Tiktoken + GPT2)
 ```bash
 python train_multi_base.py
+# or fixed version
+python train_multi_base_fixed.py
 ```
 
 Both log to [WandB](https://wandb.ai/wanwasing/hyper-language).
 
-## Expected Results
-
-| Metric | Baseline (Qwen) | HL (10k vocab) | Savings |
-|--------|-----------------|---------------|---------|
-| Tokens (avg) | ~110 | ~65 | 40% |
-| PPL | 5.2 | 6.8 | +30% |
-| Encode Time | - | 15s (10k texts) | - |
-
-*(Actual varies; check WandB runs)*
-
 ## Original Ideas (HL Innovation)
 
-**Core Original Concept**: *Abstract Shared IDs* – Cross-language words cluster into universal "hyper-concepts" (e.g., [HL001] = apple/蘋果/pomme/りんご). 
+**Core Original Concept**: *Abstract Shared IDs* – Cross-language words cluster into universal \"hyper-concepts\" (e.g., [HL001] = apple/蘋果/pomme/りんご). 
 
 - **Multi-Lingual Merging**: Manual + auto (future: clustering). Beats per-lang tokenizers.
 - **Hybrid Tokenize**: jieba (zh) + regex (others) → global freq top + concepts first.
 - **Hash Fallback**: Rare words → short [Hxxxx] MD5.
-- **Abstract Decode**: Tokens → concept reps (not orig word), enables "semantic compression".
+- **Abstract Decode**: Tokens → concept reps (not orig word), enables \"semantic compression\".
 
-Vocab build prioritizes shared concepts → massive savings (43% on samples).
+Vocab build prioritizes shared concepts → massive savings on samples.
 
 See `hl_tokenizer.py` for implementation (custom vocab builder + encode).
 
