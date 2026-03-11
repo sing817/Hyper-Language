@@ -9,9 +9,9 @@ from tqdm import tqdm
 import random
 import tiktoken
 
-max_samples = 10000
+max_samples = 1000
 batch_size = 64  # your safe
-hl_vocab_size = 10000
+hl_vocab_size = 1000
 
 wandb.init(project="hyper-language", config={"mode": "multi_base", "dataset": "allenai/c4-multi", "max_samples": max_samples, "batch_size": batch_size, "hl_vocab": hl_vocab_size})
 

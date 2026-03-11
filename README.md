@@ -53,7 +53,16 @@ Both log to [WandB](https://wandb.ai/wanwasing/hyper-language).
 
 *(Actual varies; check WandB runs)*
 
-## HL Tokenizer
+## Original Ideas (HL Innovation)
+
+**Core Original Concept**: *Abstract Shared IDs* – Cross-language words cluster into universal "hyper-concepts" (e.g., [HL001] = apple/蘋果/pomme/りんご). 
+
+- **Multi-Lingual Merging**: Manual + auto (future: clustering). Beats per-lang tokenizers.
+- **Hybrid Tokenize**: jieba (zh) + regex (others) → global freq top + concepts first.
+- **Hash Fallback**: Rare words → short [Hxxxx] MD5.
+- **Abstract Decode**: Tokens → concept reps (not orig word), enables "semantic compression".
+
+Vocab build prioritizes shared concepts → massive savings (43% on samples).
 
 See `hl_tokenizer.py` for implementation (custom vocab builder + encode).
 
