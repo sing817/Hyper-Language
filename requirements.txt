@@ -7,3 +7,7 @@ numpy
 tiktoken
 accelerate
 jieba
+googletrans==4.0.0-rc1
+opencc-python-reimplemented
+sudachipy
+sudachidict_core
