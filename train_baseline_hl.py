@@ -8,11 +8,11 @@ from hl_tokenizer import HLTokenizer
 from tqdm import tqdm
 import random
 
-max_samples = 10000
+max_samples = 1000
 batch_size = 64
-hl_vocab_size = 10000
+hl_vocab_size = 1000
 
-wandb.init(project="hyper-language", config={"dataset": "allenai/c4-multi (zh/en/ja/fr)", "max_samples": max_samples, "batch_size": batch_size, "hl_vocab": hl_vocab_size,"multi_lang": True})
+wandb.init(project="hyper-language", name="HL Abstract Shared v1", config={"dataset": "allenai/c4-multi (zh/en/ja/fr)", "max_samples": max_samples, "batch_size": batch_size, "hl_vocab": hl_vocab_size,"multi_lang": True, "version": "abstract_id_shared"})
 
 model_sizes = ['Qwen/Qwen2-1.5B']
 
