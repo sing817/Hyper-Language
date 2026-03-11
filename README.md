@@ -1,48 +1,68 @@
-## 🌍 Language
-- [English](README.md)
-- [中文](README_zh.md)
+# Hyper-Language Tokenizer Benchmark
 
-# Hyper Language (HL) - A High-Density NLP Representation
+[![WandB](https://img.shields.io/badge/WandB-hyper--language-blue.svg)](https://wandb.ai/wanwasing/hyper-language)
 
-## 📌 Introduction
-Hyper Language (HL) is a conceptual framework aimed at improving the efficiency of **large language model (LLM) training** by reducing token count while maintaining semantic integrity. This approach leverages **semantic compression, syntactic optimization, and cross-language tagging** to create a high-density text representation.
+## Overview
 
-## 🔍 Key Features
-- **Semantic Compression:** Frequently used words and phrases are represented using minimal tokens to reduce redundancy.
-- **Syntactic Optimization:** Simplifies sentence structures while preserving the meaning, enabling faster parsing.
-- **Accurate Decoding:** HL ensures that compressed tokens can be fully restored to natural language, preventing semantic loss.
-- **Cross-Language Tagging:** Enables unified representations of synonymous words across multiple languages (e.g., `{[language="cn"][000x01]}` for "蘋果", `{[language="en"][000x01]}` for "apple").
+Benchmarking a custom **Hyper-Language (HL) Tokenizer** for multi-lingual text compression efficiency.
 
-## 🎯 Research Goals
-1. **Reduce token quantity** to lower computational costs in LLM training.
-2. **Enhance multilingual NLP performance** by introducing unified token representations.
-3. **Improve efficiency in long-text processing** for AI models.
+- **Languages**: English (en), Chinese (zh), Japanese (ja), French (fr) from `allenai/c4`.
+- **Models**: Qwen/Qwen2-1.5B (FP16, CUDA).
+- **Metrics**:
+  - Token length savings vs. baseline tokenizer.
+  - Tokenization time (build + encode + model tokenize).
+  - Perplexity (PPL) degradation.
+- **Dataset**: 10k mixed samples (~2.5k per lang), max 128 tokens.
+- **Vocab**: 10k for HL.
 
-## ⚙️ Implementation Plan
-### 1️⃣ HL Token Encoding
-- Develop an **encoding system** to map natural language text to HL tokens.
-- Apply **compression algorithms** like BPE or entropy-based encoding.
+Compares HL against:
+- Qwen tokenizer (baseline).
+- Tiktoken cl100k_base.
+- GPT-2 tokenizer (approx).
 
-### 2️⃣ Transformer-Based Training
-- Train models using HL tokenized datasets to measure efficiency improvements.
-- Compare with traditional token-based training (baseline: GPT/BERT).
+## Installation
 
-### 3️⃣ Decoding & Semantic Restoration
-- Ensure HL can accurately decode back to NLP content.
-- Use **attention-based neural networks** for reconstruction validation.
+```bash
+pip install -r requirements.txt
+# torch, transformers, datasets, wandb, tqdm, numpy, tiktoken, accelerate
+```
 
-## 📊 Expected Impact
-✅ **Lower computational cost** by reducing token count.  
-✅ **Improved language model efficiency**, especially in multilingual settings.  
-✅ **Potential advancements in AI-driven knowledge representation.**  
+**CUDA Required** (tested on WSL-Ubuntu with CUDA 12.1).
 
-## 📝 Get Involved
-We welcome contributions from researchers and developers in NLP and AI. Feel free to open issues, discuss improvements, or submit PRs.
+## Usage
 
-### 🔗 License
-This project is open-source under the MIT License.
+### 1. Baseline HL vs Qwen (Multi-lang)
+```bash
+python train_baseline_hl.py
+```
 
----
+### 2. Multi Baseline (Qwen + Tiktoken + GPT2)
+```bash
+python train_multi_base.py
+```
 
-📢 **Have insights or suggestions?** Join the conversation by opening a GitHub Issue or contributing to the repository!
+Both log to [WandB](https://wandb.ai/wanwasing/hyper-language).
 
+## Expected Results
+
+| Metric | Baseline (Qwen) | HL (10k vocab) | Savings |
+|--------|-----------------|---------------|---------|
+| Tokens (avg) | ~110 | ~65 | 40% |
+| PPL | 5.2 | 6.8 | +30% |
+| Encode Time | - | 15s (10k texts) | - |
+
+*(Actual varies; check WandB runs)*
+
+## HL Tokenizer
+
+See `hl_tokenizer.py` for implementation (custom vocab builder + encode).
+
+## Notes
+
+- Batch size: 64 (OOM-safe for 1.5B on typical GPU).
+- Streaming dataset load.
+- Empty CUDA cache between batches.
+
+## License
+
+MIT
