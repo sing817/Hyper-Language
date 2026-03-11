@@ -1,20 +1,20 @@
-import json
 import os
-from collections import Counter
-from hl_tokenizer import HLTokenizer
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
 from datasets import load_dataset
 from tqdm import tqdm
+import wandb
+
+wandb.init(project="hyper-language", name="Train HL BPE Tokenizer v1")
 
 # Params
-MAX_SAMPLES = 100000  # 100k mixed
-SAMPLES_PER_LANG = MAX_SAMPLES // 4  # 25k each
-HL_VOCAB_SIZE = 100000  # 標準 100k vocab
-OUTPUT_DIR = 'tokenizer'
+vocab_size = 10000
+max_samples = 10000  # Bigger corpus for tokenizer
+hl_vocab_size = 1000  # Keep simple HL for corpus gen
 
-print(f"Training HL Tokenizer: {MAX_SAMPLES} samples, vocab_size={HL_VOCAB_SIZE}")
+print("Step 1: Generate HL corpus from C4 multi-lang")
+from hl_tokenizer import HLTokenizer  # Use current simple HL
+hl_tok = HLTokenizer(vocab_size=hl_vocab_size)
 
-# Load 100k texts (en/zh/ja/fr C4)
-texts = []
 dataset_configs = [
     ('allenai/c4', 'en', 'text'),
     ('allenai/c4', 'zh', 'text'),
@@ -22,45 +22,45 @@ dataset_configs = [
     ('allenai/c4', 'fr', 'text')
 ]
 
-for ds_name, subds, field in dataset_configs:
-    print(f"Loading {subds}...")
-    ds = load_dataset(ds_name, subds, split='train', streaming=True)
-    lang_texts = []
-    for ex in tqdm(ds, total=SAMPLES_PER_LANG, desc=f"{subds} samples"):
+hl_corpus = []
+samples_per_lang = max_samples // 4
+for dataset_name, subdataset, field in dataset_configs:
+    print(f"Loading {subdataset}...")
+    ds = load_dataset(dataset_name, subdataset, split='train', streaming=True)
+    count = 0
+    for ex in ds:
         text = ex[field].strip()
-        if len(text) > 20:  # filter short
-            lang_texts.append(text)
-        if len(lang_texts) >= SAMPLES_PER_LANG:
+        if len(text) > 50:
+            hl_text = hl_tok.encode(text)
+            hl_corpus.append(hl_text)
+            count += 1
+        if count >= samples_per_lang:
             break
-    texts.extend(lang_texts)
-    print(f"Loaded {len(lang_texts)} {subds} samples")
 
-print(f"Total texts: {len(texts)}")
+print(f"Generated {len(hl_corpus)} HL texts")
 
-# Build HL
-hl_tok = HLTokenizer(vocab_size=HL_VOCAB_SIZE)
-hl_tok.build_vocab(texts)
+# Save corpus
+os.makedirs('hl_corpus', exist_ok=True)
+with open('hl_corpus/hl_texts.txt', 'w', encoding='utf-8') as f:
+    f.write('\n'.join(hl_corpus))
 
-# Stats
-print(f"Final vocab size: {len(hl_tok.hl_vocab)}")
-print(f"Concepts used: {len(hl_tok.concepts)}")
-print("Sample vocab:", list(hl_tok.hl_vocab.items())[:20])
+print("Step 2: Train BPE tokenizer on HL corpus")
+tokenizer = Tokenizer(models.BPE())
+tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+trainer = trainers.BpeTrainer(
+    vocab_size=vocab_size,
+    special_tokens=['[PAD]', '[UNK]', '[CLS]', '[SEP]', '[MASK]'],
+    min_frequency=2
+)
 
-# Save JSONs (HF-compatible)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-with open(f'{OUTPUT_DIR}/hl_vocab.json', 'w', encoding='utf-8') as f:
-    json.dump(hl_tok.hl_vocab, f, ensure_ascii=False, indent=2)
-with open(f'{OUTPUT_DIR}/reverse_hl.json', 'w', encoding='utf-8') as f:
-    json.dump(hl_tok.reverse_hl, f, ensure_ascii=False, indent=2)
-with open(f'{OUTPUT_DIR}/concepts.json', 'w', encoding='utf-8') as f:
-    json.dump(hl_tok.concepts, f, ensure_ascii=False, indent=2)
-with open(f'{OUTPUT_DIR}/tokenizer.json', 'w', encoding='utf-8') as f:  # summary
-    summary = {
-        'vocab_size': len(hl_tok.hl_vocab),
-        'samples_used': len(texts),
-        'langs': ['en', 'zh', 'ja', 'fr']
-    }
-    json.dump(summary, f, indent=2)
+files = ['hl_corpus/hl_texts.txt']
+tokenizer.train(files, trainer)
+tokenizer.post_processor = processors.ByteLevel(trim_offsets=False)
+tokenizer.decoder = decoders.ByteLevel()
+tokenizer.save('hl_tokenizer.json')
 
-print(f"Saved to {OUTPUT_DIR}/")
-print("Next: pip install huggingface_hub; huggingface-cli upload /path/to/tokenizer wanwasing/hyper-language-tokenizer")
+wandb.save('hl_tokenizer.json')
+wandb.finish()
+
+print("Done! Use from tokenizers import Tokenizer; tok = Tokenizer.from_file('hl_tokenizer.json')")
+print("Next: integrate into train_baseline_hl.py for comparison")

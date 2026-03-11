@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm import tqdm
 import string
 import jieba
-from googletrans import Translator
+
 import langdetect
 from janome.tokenizer import Tokenizer
 
@@ -24,7 +24,7 @@ class HLTokenizer:
                 if re.match(r'^[\\u4e00-\\u9fff]+$', w):
                     jieba.add_word(w, 10000)
         self.hash_fallback = True
-        self.translator = Translator()
+        self.translator = None  # Offline mode: no Google Translate
         self.ja_tokenizer = Tokenizer()
         self.trans_cache: Dict[str, str] = {}
         self.rev_cache: Dict[tuple[str, str], str] = {}
@@ -99,14 +99,7 @@ class HLTokenizer:
         return words
 
     def _translate_batch(self, words: List[str]) -> Dict[str, str]:
-        translations = {}
-        for w in words:
-            try:
-                trans = self.translator.translate(w, dest='zh-CN')
-                translations[w] = trans.text.strip()
-            except Exception:
-                translations[w] = w
-        return translations
+        return {w: w for w in words}  # Offline: identity map
 
     def build_vocab(self, texts: List[str]):
         print("Building v2 vocab...")
@@ -205,15 +198,8 @@ class HLTokenizer:
                 base = m.group(1)
                 lang = m.group(2)
                 if lang:
-                    key = (base, lang)
-                    if key in self.rev_cache:
-                        orig = self.rev_cache[key]
-                    else:
-                        try:
-                            orig = self.translator.translate(base, src='zh-CN', dest=lang).text.strip()
-                            self.rev_cache[key] = orig
-                        except:
-                            orig = base
+                    vkey = f'[HL{base}:{lang}]'
+                    orig = self.variant_rev.get(vkey, base)
                     decoded.append(orig)
                 else:
                     decoded.append(base)
