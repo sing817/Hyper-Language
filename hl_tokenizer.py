@@ -1,15 +1,13 @@
 import re
-from collections import Counter
 from typing import Dict, List, Tuple
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from tqdm import tqdm
 import jieba
 import langdetect
 
 class HLTokenizer:
     def __init__(self):
-        self.trans_cache: Dict[str, Tuple[str, str]] = {}  # orig -> (zh, lang)
+        self.trans_cache: Dict[str, Tuple[str, str]] = {}
         self.nllb_model = None
         self.nllb_tokenizer = None
         self.device = 0 if torch.cuda.is_available() else 'cpu'
@@ -22,7 +20,7 @@ class HLTokenizer:
             'de': 'deu_Latn',
             'ko': 'kor_Hang',
         }
-        print("Hyper-Language Tokenizer v4.1: encode() tags sentences -> translate_pending() -> finalize() -> [HLword:lang]")
+        print("Hyper-Language Tokenizer v5.0: lang-block encode - continuous stream, [lang][HLw]...[/lang] or bare [HLw] for zh")
 
     def _load_nllb(self):
         if self.nllb_model is None:
@@ -38,14 +36,14 @@ class HLTokenizer:
     def _translate(self, texts: List[str], src_lang: str, tgt_lang: str = 'zho_Hans') -> List[str]:
         self._load_nllb()
         src_code = self.lang_map.get(src_lang, 'und_Latn')
+        tgt_code = self.lang_map.get(tgt_lang, 'und_Latn')
         self.nllb_tokenizer.src_lang = src_code
         inputs = self.nllb_tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(self.device)
         with torch.no_grad():
             gen_tokens = self.nllb_model.generate(
                 **inputs,
-                forced_bos_token_id=self.nllb_tokenizer.convert_tokens_to_ids(tgt_lang),
+                forced_bos_token_id=self.nllb_tokenizer.convert_tokens_to_ids(tgt_code),
                 max_new_tokens=256,
-                max_length=None,
                 num_beams=2,
                 early_stopping=True
             )
@@ -53,10 +51,15 @@ class HLTokenizer:
 
     def _detect_lang(self, text: str) -> str:
         text = text.strip()
-        if any(0x4e00 <= ord(c) <= 0x9fff for c in text):
-            return 'zh'
         if len(text) < 3:
             return self._guess_lang(text)
+        h_count, k_count, l_count, h_p, k_p, l_p = self._count_scripts(text)
+        if k_p > 0.2 and k_count > h_count:
+            return 'ja'
+        if h_p > 0.2:
+            return 'zh'
+        if l_p > 0.5:
+            return 'en'
         try:
             ld_lang = langdetect.detect(text)
             return 'zh' if ld_lang.startswith('zh') else ld_lang[:2]
@@ -65,7 +68,7 @@ class HLTokenizer:
 
     def _guess_lang(self, text: str) -> str:
         text = text.lower().strip()
-        if re.match(r'^[a-z0-9 \.,!?\'\-\']+$', text):
+        if re.match(r'^[a-z0-9 ,.!?\'-]+$', text):
             return 'en'
         if any(0x3040 <= ord(c) <= 0x30ff or 0x31f0 <= ord(c) <= 0x31ff for c in text):
             return 'ja'
@@ -73,131 +76,137 @@ class HLTokenizer:
             return 'zh'
         return 'unk'
 
-    def sentence_split(self, text: str) -> List[str]:
-        # Simple sentence splitter: . ! ? followed by space or newline
-        sents = re.split(r'(?<=[\.!\?])\s+', text.strip())
-        return [s.strip() for s in sents if s.strip()]
+    def _count_scripts(self, text: str) -> Tuple[int, int, int, float, float, float]:
+        hanzi_count = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
+        kana_count = sum(1 for c in text if (0x3040 <= ord(c) <= 0x30FF or 0x31F0 <= ord(c) <= 0x31FF))
+        latin_count = sum(1 for c in text if c.isalpha())
+        total = len(text)
+        hanzi_p = hanzi_count / total if total > 0 else 0.0
+        kana_p = kana_count / total if total > 0 else 0.0
+        latin_p = latin_count / total if total > 0 else 0.0
+        return hanzi_count, kana_count, latin_count, hanzi_p, kana_p, latin_p
 
-    def parse_waiting_tag(self, tagged: str) -> Tuple[str, str]:
-        """Parse ["sent":"lang":"待trans"] -> (sent, lang)"""
-        m = re.match(r'\["([^"]*)":\"([a-z]+)\":\"待trans\"\]', tagged)
-        if m:
-            return m.groups()
-        return tagged, 'unk'
-
-    def parse_translated_tag(self, tagged: str) -> Tuple[str, str]:
-        """Parse ["zh":"lang":"translated"] -> (zh, lang)"""
-        m = re.match(r'\["([^"]*)":\"([a-z]+)\":\"translated\"\]', tagged)
-        if m:
-            return m.groups()
-        return tagged, 'unk'
-
-    def encode_sentence(self, sent: str) -> str:
-        lang = self._detect_lang(sent)
-        if lang == 'zh':
-            words = [w for w in jieba.lcut(sent) if len(w) >= 1]
-            return ' '.join([f'[HL{w}:zh]' for w in words])
-        else:
-            return f'["{sent}":"{lang}":"待trans"]'
+    def phrase_split(self, text: str) -> List[str]:
+        # split on comma, period, etc.
+        phrases = re.split(r'[,.;。！？]', text.strip())
+        return [p.strip() for p in phrases if p.strip()]
 
     def encode(self, text: str) -> str:
-        sents = self.sentence_split(text)
-        return ' | '.join(self.encode_sentence(sent) for sent in sents)  # | as sent separator
-
-
+        phrases = self.phrase_split(text)
+        parts = []
+        for phrase in phrases:
+            lang = self._detect_lang(phrase)
+            if lang == 'zh':
+                words = [w for w in jieba.lcut(phrase) if len(w) > 1 and w.strip()]
+                hl_part = ''.join(f'[HL{w}]' for w in words)
+                parts.append(hl_part)
+            else:
+                parts.append(f'[{lang}]{phrase}[/{lang}]')
+        return ''.join(parts)
 
     def translate_pending(self, text: str) -> str:
-        """Translate [\"sent\":\"lang\":\"待trans\"] parts only."""
-        parts = text.split(' | ')
-        new_parts = []
-        for part in parts:
-            orig, lang = self.parse_waiting_tag(part)
-            if lang != 'unk':
-                zh_trans = self._translate([orig], lang)[0]
-                self.trans_cache[orig] = (zh_trans, lang)
-                new_part = f'["{zh_trans}":"{lang}":"translated"]'
+        def repl(m):
+            lang = m.group(1)
+            orig = m.group(2).strip()
+            if orig in self.trans_cache:
+                zh, _ = self.trans_cache[orig]
             else:
-                new_part = part  # keep HL for zh
-            new_parts.append(new_part)
-        return ' | '.join(new_parts)
-
-    def finalize_sentence(self, part: str) -> str:
-        """translated tag -> HL jieba; HL already -> keep."""
-        zh, lang = self.parse_translated_tag(part)
-        if lang != 'unk':
-            words = [w for w in jieba.lcut(zh) if len(w) >= 1]
-            return ' '.join([f'[HL{w}:{lang}]' for w in words])
-        return part  # already HL or other
+                zh_list = self._translate([orig], lang)
+                zh = zh_list[0]
+                self.trans_cache[orig] = (zh, lang)
+            print(f"DEBUG translate_pending({lang}): {repr(orig)} → {repr(zh)}")
+            return f'[{lang}]{zh}[/{lang}]'
+        pattern = r'\[([a-z]{2})\]([^[\]]+)\[/\1\]'
+        return re.sub(pattern, repl, text)
 
     def finalize(self, text: str) -> str:
-        """Full finalize: multi-sentence [..tag..] -> HL tokens."""
-        parts = text.split(' | ')
-        return ' | '.join(self.finalize_sentence(part) for part in parts)
+        def repl(m):
+            lang = m.group(1)
+            zh_text = m.group(2).strip()
+            words = [w for w in jieba.lcut(zh_text) if len(w) > 1 and w.strip()]
+            hl_words = ''.join(f'[HL{w}]' for w in words)
+            return f'[{lang}]{hl_words}[/{lang}]'
+        pattern = r'\[([a-z]{2})\]([^[\]]+)\[/\1\]'
+        return re.sub(pattern, repl, text)
 
     def encode_full(self, text: str) -> str:
-        tagged = self.encode(text)
-        translated = self.translate_pending(tagged)
-        return self.finalize(translated)
+        pending = self.encode(text)
+        transed = self.translate_pending(pending)
+        hl_final = self.finalize(transed)
+        return hl_final
 
     def decode(self, hl_text: str) -> str:
-        parts = hl_text.split(' | ')
-        decoded_parts = []
-        for part in parts:
-            words = part.split()
-            block_words = []
-            block_lang = None
-            for token in words:
-                m = re.match(r'\\\[HL([^\\]:]+):([a-z]+)\\\\]', token)
-                if m:
-                    zh_word, lng = m.groups()
-                    block_words.append(zh_word)
-                    if block_lang is None:
-                        block_lang = lng
-                    elif block_lang != lng:
-                        block_lang = 'mixed'
-                else:
-                    block_words.append(token)
-            if block_words and block_lang and block_lang != 'zh' and block_lang != 'mixed':
-                zh_sent = ''.join(block_words)
-                tgt_code = self.lang_map.get(block_lang, 'eng_Latn')
-                rev = self._translate([zh_sent], 'zh', tgt_code)[0]
-                decoded_parts.append(rev)
+        self._load_nllb()
+        phrases = []
+        current_lang = None
+        current_words = []
+        pos = 0
+        while pos < len(hl_text):
+            m_open = re.match(r'\[([a-z]{2})\]', hl_text[pos:])
+            if m_open:
+                lang = m_open.group(1)
+                if current_lang is not None and current_words:
+                    # close prev block? but streaming, assume sequential
+                    pass  # handled at close
+                current_lang = lang
+                current_words = []
+                pos += m_open.end()
+                continue
+            m_close = re.match(r'\[/([a-z]{2})\]', hl_text[pos:])
+            if m_close:
+                close_lang = m_close.group(1)
+                if current_lang == close_lang and current_words:
+                    zh_sent = ''.join(current_words)
+                    tgt_code = self.lang_map.get(current_lang, 'eng_Latn')
+                    orig_list = self._translate([zh_sent], 'zh', current_lang)
+                    orig = orig_list[0]
+                    phrases.append(orig)
+                current_words = []
+                current_lang = None
+                pos += m_close.end()
+                continue
+            m_hl = re.match(r'\[HL([^]]+)\]', hl_text[pos:])
+            if m_hl:
+                word = m_hl.group(1)
+                current_words.append(word)
+                pos += m_hl.end()
+                continue
+            # non-token char? skip or error
+            pos += 1
+        # final block
+        if current_words:
+            if current_lang:
+                zh_sent = ''.join(current_words)
+                tgt_code = self.lang_map.get(current_lang, 'eng_Latn')
+                orig_list = self._translate([zh_sent], 'zh', current_lang)
+                orig = orig_list[0]
+                phrases.append(orig)
             else:
-                decoded_parts.append(''.join(block_words))
-        return '. '.join(decoded_parts).strip()
+                phrases.append(''.join(current_words))
+        return ', '.join(phrases).strip()  # comma for phrases
 
 if __name__ == '__main__':
     tokenizer = HLTokenizer()
-    samples = [
-        "你好世界 蘋果。",
-        "The quick brown fox jumps over the lazy dog.",
-        "Pomme bonjour chien.",
-        "速い狐犬りんご。"
-    ]
-    print("--- New flow demo ---")
-    text = "The quick brown fox jumps over the lazy dog. 你好世界 蘋果。"
-    enc = tokenizer.encode(text)
-    print(f"Orig: {text}")
-    print(f"Enc (tags): {enc}")
-    trans = tokenizer.translate_pending(enc)
-    print(f"Translated: {trans}")
-    hl = tokenizer.finalize(trans)
-    print(f"HL tokens: {hl}")
-    print(f"Decode back: {tokenizer.decode(hl)}\\n")
-
-    print("--- Chinese only ---")
-    zh_text = "你好世界 蘋果。"
-    enc_zh = tokenizer.encode(zh_text)
-    print(f"Orig ZH: {zh_text}")
-    print(f"Enc ZH: {enc_zh}")
-    hl_zh = tokenizer.finalize(enc_zh)
-    print(f"HL ZH: {hl_zh}")
-    print(f"Decode ZH: {tokenizer.decode(hl_zh)}\\n")
-
-    print("--- Full pipeline on samples ---")
-    for text in samples[1:]:
-        full = tokenizer.encode_full(text)
-        dec = tokenizer.decode(full)
-        print(f"Orig: {text}")
-        print(f"Full HL: {full}")
-        print(f"Decoded: {dec}")
+    text = "Hello World,你好世界,こんにちは世界"
+    print("=== Lang Block Roundtrip ===")
+    print(f"Input: {text}")
+    pending = tokenizer.encode(text)
+    print(f"Encode pending: {pending}")
+    trans = tokenizer.translate_pending(pending)
+    print(f"After translate: {trans}")
+    final_hl = tokenizer.finalize(trans)
+    print(f"Final HL: {final_hl}")
+    decoded = tokenizer.decode(final_hl)
+    print(f"Decoded: {decoded}")
+    
+    print("\n=== ZH only ===")
+    zh = "你好世界,蘋果。"
+    enc_zh = tokenizer.encode(zh)
+    dec_zh = tokenizer.decode(enc_zh)
+    print(f"ZH in: {zh} -> enc: {enc_zh} -> dec: {dec_zh}")
+    
+    print("\n=== EN full ===")
+    en = "Hello World, good morning."
+    full_en = tokenizer.encode_full(en)
+    dec_en = tokenizer.decode(full_en)
+    print(f"EN in: {en} -> full: {full_en} -> dec: {dec_en}")
