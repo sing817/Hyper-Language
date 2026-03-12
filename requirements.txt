@@ -1,13 +1,5 @@
-torch
-transformers>=4.44.0
-sentencepiece
-accelerate
-datasets
-wandb
-tqdm
-numpy
-tiktoken  # optional BPE bench
+torch>=2.0.0
+transformers
 jieba
 langdetect
-# Removed: googletrans (NLLB replaces), sudachi (v3 no ja native)
-# Offline NLLB-200 for 100K+ batch zh-pivot
+tqdm

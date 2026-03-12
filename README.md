@@ -1,4 +1,4 @@
-# Hyper-Language Tokenizer (HL Tokenizer v2.5)
+# Hyper-Language Tokenizer (HL Tokenizer v5.1)
 
 Cross-language semantic compression via Chinese-pivot shared vocabulary. Boost LLM training efficiency by converting to high-density tokens.
 
@@ -10,21 +10,22 @@ Cross-language semantic compression via Chinese-pivot shared vocabulary. Boost L
 - **Zh Pivot Vocab**: Chinese → `[HL你好]` (lossless, zero-cost).
 - **Variants**: Non-Zh → `[HL你好:en]` (shared pivot, decode to orig/fallback).
 
-**Decode Table**:
-| Token         | Decode (Variant / Zh Fallback)     |
-|---------------|-----------------------------------|
-| `[HL你好]`    | `你好` (base)                     |
-| `[HL你好:en]` | `hello` / 你好                   |
-| `[HL苹果:en]` | `apple` / 苹果                    |
-| `[HL狗:es]`   | `perro` / 狗                      |
+**Decode Table v5.1** (lang-block bare HL):
+| Format                       | Decode (orig lang / zh fallback) |
+|------------------------------|----------------------------------|
+| `[HL你好][HL世界]`           | `你好世界` (zh bare)            |
+| `[en][HL你好][HL世界][/en]`  | `Hello World` / 你好世界        |
+| `[ja][HL你好][HL世界][/ja]`  | `こんにちは世界` / 你好世界     |
 
 **Core Compression**: Shared HL IDs (Zh pivot >50% efficiency), low PPL via semantic abstraction.
 
-**Example**:
+**Example v5.1**:
 ```
-Input: 你好 hello 蘋果 apple
-Encode: [HL你好] [HL你好:en] [HL苹果] [HL苹果:en]
-Decode: 你好 hello 蘋果 apple  ✓ lossless
+Input: Hello World,你好世界,こんにちは世界
+Pending: [en]Hello World[/en][HL你好][HL世界][ja]こんにちは世界[/ja]
+Trans: [en]你好世界[/en]...[ja]你好世界[/ja]
+Final: [en][HL你好][HL世界][/en][HL你好][HL世界][ja][HL你好][HL世界][/ja]
+Decode: Hello World, 你好世界, こんにちは世界 ✓
 ```
 
 ## 🚀 Quick Start

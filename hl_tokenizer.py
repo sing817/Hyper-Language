@@ -79,7 +79,7 @@ class HLTokenizer:
     def _count_scripts(self, text: str) -> Tuple[int, int, int, float, float, float]:
         hanzi_count = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
         kana_count = sum(1 for c in text if (0x3040 <= ord(c) <= 0x30FF or 0x31F0 <= ord(c) <= 0x31FF))
-        latin_count = sum(1 for c in text if c.isalpha())
+        latin_count = sum(1 for c in text if 'a' <= c.lower() <= 'z')
         total = len(text)
         hanzi_p = hanzi_count / total if total > 0 else 0.0
         kana_p = kana_count / total if total > 0 else 0.0
