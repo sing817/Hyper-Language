@@ -7,23 +7,22 @@ import wandb
 wandb.init(project="hyper-language", name="Train HL BPE Tokenizer v1")
 
 # Params
-vocab_size = 10000
-max_samples = 10000  # Bigger corpus for tokenizer
-hl_vocab_size = 1000  # Keep simple HL for corpus gen
+vocab_size = 128000
+max_samples = 1000000  # 1M+ for large vocab
+hl_vocab_size = 2000  # Larger base HL
 
 print("Step 1: Generate HL corpus from C4 multi-lang")
 from hl_tokenizer import HLTokenizer  # Use current simple HL
 hl_tok = HLTokenizer(vocab_size=hl_vocab_size)
 
 dataset_configs = [
-    ('allenai/c4', 'en', 'text'),
-    ('allenai/c4', 'zh', 'text'),
-    ('allenai/c4', 'ja', 'text'),
-    ('allenai/c4', 'fr', 'text')
+    ('allenai/c4', 'en', 'text'), ('allenai/c4', 'zh', 'text'), ('allenai/c4', 'ja', 'text'),
+    ('allenai/c4', 'fr', 'text'), ('allenai/c4', 'de', 'text'), ('allenai/c4', 'es', 'text'),
+    ('allenai/c4', 'it', 'text'), ('allenai/c4', 'ko', 'text'), ('allenai/c4', 'ru', 'text')
 ]
 
 hl_corpus = []
-samples_per_lang = max_samples // 4
+samples_per_lang = max_samples // len(dataset_configs)
 for dataset_name, subdataset, field in dataset_configs:
     print(f"Loading {subdataset}...")
     ds = load_dataset(dataset_name, subdataset, split='train', streaming=True)
@@ -50,7 +49,9 @@ tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
 trainer = trainers.BpeTrainer(
     vocab_size=vocab_size,
     special_tokens=['[PAD]', '[UNK]', '[CLS]', '[SEP]', '[MASK]'],
-    min_frequency=2
+    min_frequency=5,  # Higher for large corpus
+    show_progress=True,
+    initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
 )
 
 files = ['hl_corpus/hl_texts.txt']
