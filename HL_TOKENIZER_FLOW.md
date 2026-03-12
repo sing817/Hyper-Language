@@ -1,4 +1,4 @@
-# HLTokenizer Flowchart v2.4 (Bilingual / 中英雙語)
+# HLTokenizer Flowchart v3.2 (Preprocess Tag → Batch Trans → Finalize)
 
 ```mermaid
 graph TD

@@ -49,4 +49,4 @@ print(t.decode(encoded))  # Hello world 你好 世界 ✓
 - Embedding-based auto-clustering for variants.
 - Full multilingual benchmarks (add ja/ko/es).
 
-**v2.5 (2026-03-12)**: English-first; merged benchmarks; origin doc'd. Original idea: High-density pivot for LLM efficiency.
+**v3.2 (2026-03-12)**: Tagged preprocess flow [:lang:待trans] → batch trans → finalize [word:lang]. Separates heavy NLLB from tokenization for pipeline efficiency.
