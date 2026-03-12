@@ -11,6 +11,7 @@ class HLTokenizer:
         self.nllb_model = None
         self.nllb_tokenizer = None
         self.device = 0 if torch.cuda.is_available() else 'cpu'
+        self.model_name = "facebook/nllb-200-3.3B"
         self.lang_map = {
             'zh': 'zho_Hans',
             'ja': 'jpn_Jpan',
@@ -21,15 +22,18 @@ class HLTokenizer:
             'ko': 'kor_Hang',
         }
         print("Hyper-Language Tokenizer v5.0: lang-block encode - continuous stream, [lang][HLw]...[/lang] or bare [HLw] for zh")
+        print(f"Using NLLB model: {self.model_name} on {self.device}")
 
     def _load_nllb(self):
         if self.nllb_model is None:
-            model_name = "facebook/nllb-200-distilled-600M"
-            print(f"Loading NLLB {model_name}...")
-            self.nllb_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.nllb_model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            print(f"Loading NLLB {self.model_name}...")
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            print(f"Using dtype: {torch_dtype}, device: {self.device}")
+            self.nllb_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.nllb_model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
             self.nllb_model.to(self.device)
             self.nllb_model.eval()
+            self.nllb_tokenizer.pad_token = self.nllb_tokenizer.eos_token
             self.nllb_model.config.tie_word_embeddings = False
             print("NLLB loaded OK")
 
@@ -43,9 +47,14 @@ class HLTokenizer:
             gen_tokens = self.nllb_model.generate(
                 **inputs,
                 forced_bos_token_id=self.nllb_tokenizer.convert_tokens_to_ids(tgt_code),
-                max_new_tokens=256,
-                num_beams=2,
-                early_stopping=True
+                max_new_tokens=512,
+                num_beams=4,
+                do_sample=False,
+                early_stopping=True,
+                pad_token_id=self.nllb_tokenizer.pad_token_id,
+                repetition_penalty=1.3,
+                length_penalty=1.0,
+                no_repeat_ngram_size=3
             )
         return self.nllb_tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
 
@@ -113,6 +122,12 @@ class HLTokenizer:
             else:
                 zh_list = self._translate([orig], lang)
                 zh = zh_list[0]
+                if self._detect_lang(zh) != 'zh':
+                    print(f"Fallback via en for {lang}: direct {repr(zh)}")
+                    en_list = self._translate([orig], lang, 'eng_Latn')
+                    en_trans = en_list[0]
+                    zh = en_trans  # Use accurate en proxy for jieba/HL (avoids repetition)
+                    print(f"  → en: {repr(en_trans)} (proxy for HL)")
                 self.trans_cache[orig] = (zh, lang)
             print(f"DEBUG translate_pending({lang}): {repr(orig)} → {repr(zh)}")
             return f'[{lang}]{zh}[/{lang}]'
@@ -187,26 +202,26 @@ class HLTokenizer:
 
 if __name__ == '__main__':
     tokenizer = HLTokenizer()
-    text = "Hello World,你好世界,こんにちは世界"
-    print("=== Lang Block Roundtrip ===")
-    print(f"Input: {text}")
-    pending = tokenizer.encode(text)
-    print(f"Encode pending: {pending}")
-    trans = tokenizer.translate_pending(pending)
-    print(f"After translate: {trans}")
-    final_hl = tokenizer.finalize(trans)
-    print(f"Final HL: {final_hl}")
-    decoded = tokenizer.decode(final_hl)
-    print(f"Decoded: {decoded}")
-    
-    print("\n=== ZH only ===")
-    zh = "你好世界,蘋果。"
-    enc_zh = tokenizer.encode(zh)
-    dec_zh = tokenizer.decode(enc_zh)
-    print(f"ZH in: {zh} -> enc: {enc_zh} -> dec: {dec_zh}")
-    
-    print("\n=== EN full ===")
+    print("\n=== Test JA ===")
+    ja = "こんにちは世界"
+    print(f"JA input: {ja}")
+    pending_ja = tokenizer.encode(ja)
+    print(f"Pending: {pending_ja}")
+    trans_ja = tokenizer.translate_pending(pending_ja)
+    print(f"Trans: {trans_ja}")
+    final_ja = tokenizer.finalize(trans_ja)
+    print(f"Final: {final_ja}")
+    dec_ja = tokenizer.decode(final_ja)
+    print(f"Decode: {dec_ja}")
+
+    print("\n=== Test EN ===")
     en = "Hello World, good morning."
-    full_en = tokenizer.encode_full(en)
-    dec_en = tokenizer.decode(full_en)
-    print(f"EN in: {en} -> full: {full_en} -> dec: {dec_en}")
+    print(f"EN input: {en}")
+    pending_en = tokenizer.encode(en)
+    print(f"Pending: {pending_en}")
+    trans_en = tokenizer.translate_pending(pending_en)
+    print(f"Trans: {trans_en}")
+    final_en = tokenizer.finalize(trans_en)
+    print(f"Final: {final_en}")
+    dec_en = tokenizer.decode(final_en)
+    print(f"Decode: {dec_en}")
