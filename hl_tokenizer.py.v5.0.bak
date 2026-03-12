@@ -11,7 +11,7 @@ class HLTokenizer:
         self.nllb_model = None
         self.nllb_tokenizer = None
         self.device = 0 if torch.cuda.is_available() else 'cpu'
-        self.model_name = "facebook/nllb-200-distilled-1.3B"
+        self.model_name = "facebook/nllb-200-3.3B"
         self.lang_map = {
             'zh': 'zho_Hans',
             'ja': 'jpn_Jpan',
@@ -21,29 +21,13 @@ class HLTokenizer:
             'de': 'deu_Latn',
             'ko': 'kor_Hang',
         }
-        print("Hyper-Language Tokenizer v5.1: lang-block encode - continuous stream, [lang][HLw]...[/lang] or bare [HLw] for zh. Punct retained, optimized gen, strict decode.")
+        print("Hyper-Language Tokenizer v5.0: lang-block encode - continuous stream, [lang][HLw]...[/lang] or bare [HLw] for zh")
         print(f"Using NLLB model: {self.model_name} on {self.device}")
 
     def _load_nllb(self):
         if self.nllb_model is None:
             print(f"Loading NLLB {self.model_name}...")
-            # GPU mem check
-            use_gpu = self.device != 'cpu' and torch.cuda.is_available()
-            if use_gpu:
-                try:
-                    free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
-                    free_gb = free_bytes / (1024 ** 3)
-                    total_gb = total_bytes / (1024 ** 3)
-                    print(f"GPU mem: {free_gb:.2f}/{total_gb:.2f} GB free")
-                    if free_gb < 2.5:
-                        print("Low GPU memory (<2.5GB free), falling back to CPU")
-                        self.device = 'cpu'
-                        use_gpu = False
-                except Exception as e:
-                    print(f"GPU check failed: {e}, using CPU")
-                    self.device = 'cpu'
-                    use_gpu = False
-            torch_dtype = torch.float16 if use_gpu else torch.float32
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
             print(f"Using dtype: {torch_dtype}, device: {self.device}")
             self.nllb_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.nllb_model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=torch_dtype, low_cpu_mem_usage=True)
@@ -63,11 +47,14 @@ class HLTokenizer:
             gen_tokens = self.nllb_model.generate(
                 **inputs,
                 forced_bos_token_id=self.nllb_tokenizer.convert_tokens_to_ids(tgt_code),
-                max_new_tokens=128,
-                num_beams=2,
+                max_new_tokens=512,
+                num_beams=4,
                 do_sample=False,
                 early_stopping=True,
                 pad_token_id=self.nllb_tokenizer.pad_token_id,
+                repetition_penalty=1.3,
+                length_penalty=1.0,
+                no_repeat_ngram_size=3
             )
         return self.nllb_tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
 
@@ -109,6 +96,7 @@ class HLTokenizer:
         return hanzi_count, kana_count, latin_count, hanzi_p, kana_p, latin_p
 
     def phrase_split(self, text: str) -> List[str]:
+        # split on comma, period, etc.
         phrases = re.split(r'[,.;。！？]', text.strip())
         return [p.strip() for p in phrases if p.strip()]
 
@@ -118,7 +106,7 @@ class HLTokenizer:
         for phrase in phrases:
             lang = self._detect_lang(phrase)
             if lang == 'zh':
-                words = [w for w in jieba.lcut(phrase) if w.strip()]
+                words = [w for w in jieba.lcut(phrase) if len(w) > 1 and w.strip()]
                 hl_part = ''.join(f'[HL{w}]' for w in words)
                 parts.append(hl_part)
             else:
@@ -135,12 +123,11 @@ class HLTokenizer:
                 zh_list = self._translate([orig], lang)
                 zh = zh_list[0]
                 if self._detect_lang(zh) != 'zh':
-                    print(f"Fallback via en→zh for {lang}: direct {repr(zh)} not detected as zh")
+                    print(f"Fallback via en for {lang}: direct {repr(zh)}")
                     en_list = self._translate([orig], lang, 'eng_Latn')
                     en_trans = en_list[0]
-                    zh_list2 = self._translate([en_trans], 'eng_Latn', 'zho_Hans')
-                    zh = zh_list2[0]
-                    print(f"  → en: {repr(en_trans)} → zh: {repr(zh)}")
+                    zh = en_trans  # Use accurate en proxy for jieba/HL (avoids repetition)
+                    print(f"  → en: {repr(en_trans)} (proxy for HL)")
                 self.trans_cache[orig] = (zh, lang)
             print(f"DEBUG translate_pending({lang}): {repr(orig)} → {repr(zh)}")
             return f'[{lang}]{zh}[/{lang}]'
@@ -151,7 +138,7 @@ class HLTokenizer:
         def repl(m):
             lang = m.group(1)
             zh_text = m.group(2).strip()
-            words = [w for w in jieba.lcut(zh_text) if w.strip()]
+            words = [w for w in jieba.lcut(zh_text) if len(w) > 1 and w.strip()]
             hl_words = ''.join(f'[HL{w}]' for w in words)
             return f'[{lang}]{hl_words}[/{lang}]'
         pattern = r'\[([a-z]{2})\]([^[\]]+)\[/\1\]'
@@ -173,6 +160,9 @@ class HLTokenizer:
             m_open = re.match(r'\[([a-z]{2})\]', hl_text[pos:])
             if m_open:
                 lang = m_open.group(1)
+                if current_lang is not None and current_words:
+                    # close prev block? but streaming, assume sequential
+                    pass  # handled at close
                 current_lang = lang
                 current_words = []
                 pos += m_open.end()
@@ -180,10 +170,9 @@ class HLTokenizer:
             m_close = re.match(r'\[/([a-z]{2})\]', hl_text[pos:])
             if m_close:
                 close_lang = m_close.group(1)
-                if current_lang != close_lang:
-                    raise ValueError(f"Language mismatch: expected [/ {current_lang}], got [/ {close_lang}] at pos {pos}")
-                if current_words:
+                if current_lang == close_lang and current_words:
                     zh_sent = ''.join(current_words)
+                    tgt_code = self.lang_map.get(current_lang, 'eng_Latn')
                     orig_list = self._translate([zh_sent], 'zh', current_lang)
                     orig = orig_list[0]
                     phrases.append(orig)
@@ -194,18 +183,22 @@ class HLTokenizer:
             m_hl = re.match(r'\[HL([^]]+)\]', hl_text[pos:])
             if m_hl:
                 word = m_hl.group(1)
-                if current_lang is None:
-                    raise ValueError(f"HL token outside lang block at pos {pos}")
                 current_words.append(word)
                 pos += m_hl.end()
                 continue
-            raise ValueError(f"Strict decode error: invalid syntax at pos {pos}: '{hl_text[pos:pos+20]}'")
-        # final block if open
-        if current_lang is not None and current_words:
-            raise ValueError("Unclosed lang block at end of input")
+            # non-token char? skip or error
+            pos += 1
+        # final block
         if current_words:
-            phrases.append(''.join(current_words))  # bare HL as zh
-        return ' '.join(phrases).strip()  # space for phrases, punct inside
+            if current_lang:
+                zh_sent = ''.join(current_words)
+                tgt_code = self.lang_map.get(current_lang, 'eng_Latn')
+                orig_list = self._translate([zh_sent], 'zh', current_lang)
+                orig = orig_list[0]
+                phrases.append(orig)
+            else:
+                phrases.append(''.join(current_words))
+        return ', '.join(phrases).strip()  # comma for phrases
 
 if __name__ == '__main__':
     tokenizer = HLTokenizer()
@@ -232,11 +225,3 @@ if __name__ == '__main__':
     print(f"Final: {final_en}")
     dec_en = tokenizer.decode(final_en)
     print(f"Decode: {dec_en}")
-
-    print("\n=== Test Mixed Roundtrip ===")
-    mixed = "Hello World,你好世界,こんにちは世界"
-    print(f"Mixed input: {mixed}")
-    full_mixed = tokenizer.encode_full(mixed)
-    print(f"Full encode: {full_mixed}")
-    dec_mixed = tokenizer.decode(full_mixed)
-    print(f"Decode roundtrip: {dec_mixed}")
