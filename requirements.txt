@@ -3,3 +3,5 @@ transformers
 jieba
 langdetect
 tqdm
+opencc
+pykakasi
