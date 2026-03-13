@@ -5,6 +5,9 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import jieba
 import opencc
 import pykakasi
+import os
+import openai
+import json
 
 class HLTokenizer:
     def __init__(self):
@@ -26,7 +29,9 @@ class HLTokenizer:
             'de': 'deu_Latn',
             'ko': 'kor_Hang',
         }
-        print("Hyper-Language Tokenizer v5.3: script-family continuous segmentation for unpunctuated multilingual streams. [lang][HLw]... Punct retained, optimized gen, strict decode.")
+        self.llm_client = None
+        self.tag_cache = {}
+        print("Hyper-Language Tokenizer v5.4: LLM-based language tagging with Qwen (fallback to heuristics). [lang][HLw]... Punct retained, optimized gen, strict decode.")
         print(f"Using NLLB model: {self.model_name} on {self.device}")
 
     def _load_nllb(self):
@@ -168,6 +173,54 @@ class HLTokenizer:
         if current.strip():
             segments.append(current.strip())
         return segments
+
+    def _init_llm(self):
+        """Initialize the LLM client lazily."""
+        if self.llm_client is None:
+            self.llm_client = openai.OpenAI(
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key=os.getenv("DASHSCOPE_API_KEY")
+            )
+
+    def _llm_language_tag(self, text: str) -> dict:
+        """Use LLM to tag language segments. Cache results."""
+        if text in self.tag_cache:
+            return self.tag_cache[text]
+
+        self._init_llm()
+
+        prompt = '''You are a highly accurate multilingual language tagging expert. Your task is to identify continuous segments of different languages in the input text, even in code-switched sentences.
+
+Rules:
+- Segment into minimal continuous blocks where each block is predominantly one language.
+- Use 2-letter ISO codes: 'en' English, 'zh' Chinese (simplified/traditional), 'ja' Japanese, 'ko' Korean, 'fr' French, 'es' Spanish, 'de' German, etc. Use 'zh' for all Chinese.
+- Do not split within words or phrases of the same language. Keep punctuation with the segment.
+- Preserve exact original text in "text" field.
+- Output ONLY valid JSON object: {"segments": [{"text": "exact segment text", "lang": "lang_code"}, ...]} 
+
+Examples:
+"I went to 銀行 to check my 残高" -> {"segments": [{"text": "I went to ", "lang": "en"}, {"text": "銀行", "lang": "zh"}, {"text": " to check my ", "lang": "en"}, {"text": "残高", "lang": "zh"}]}
+"去銀行 check balance" -> {"segments": [{"text": "去銀行 ", "lang": "zh"}, {"text": "check balance", "lang": "en"}]}
+"Hello 先生、こんにちは銀行" -> {"segments": [{"text": "Hello ", "lang": "en"}, {"text": "先生", "lang": "zh"}, {"text": "、", "lang": "ja"}, {"text": "こんにちは", "lang": "ja"}, {"text": "銀行", "lang": "zh"}]}} 
+
+Now process this exact text: "{}"'''.format(text)
+
+        try:
+            response = self.llm_client.chat.completions.create(
+                model="qwen-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            content = response.choices[0].message.content.strip()
+            result = json.loads(content)
+            self.tag_cache[text] = result
+            return result
+        except Exception as e:
+            print(f"[LLM-ERR] {str(e)} Fallback to heuristic.")
+            seg_texts = self.lang_segments(text)
+            fallback = {"segments": [{"text": seg, "lang": self._detect_lang(seg)} for seg in seg_texts]}
+            self.tag_cache[text] = fallback
+            return fallback
     
     def _convert_ja_kanji_to_kana(self, text: str) -> str:
         """Convert Japanese kanji to hiragana using kakasi.
@@ -185,59 +238,47 @@ class HLTokenizer:
             return text
 
     def encode(self, text: str) -> str:
-        """Encode: segment by language → translate to Chinese → jieba → HL tokens.
+        """Encode: LLM-based (or heuristic) language segments → translate to Chinese → jieba → HL tokens.
         
         All output is Chinese HL tokens grouped by source language (with language wrapper).
-        Native Chinese is converted to simplified form and tagged with [原] (original).
-        Japanese kanji are converted to kana before processing (only for Japanese text).
+        Native Chinese (zh, zh-tw) → [原]...[/原]; others → [lang]...[/lang].
+        Japanese: kanji to kana before translate.
         """
-        segments = self.lang_segments(text)
-        
-        # Pre-process segments: convert Japanese kanji to kana
-        # This ensures Japanese text is recognized as Japanese, not Chinese
-        # BUT: Only for segments that are clearly Japanese (has kana)
-        # to avoid corrupting Chinese text
+        text_stripped_len = len(text.strip())
+        if text_stripped_len < 3:
+            seg_texts = self.lang_segments(text)
+            segments = [{"text": seg.strip(), "lang": self._detect_lang(seg)} for seg in seg_texts]
+        else:
+            tagging = self._llm_language_tag(text)
+            segments = tagging["segments"]
+
+        # Pre-process Japanese segments
         processed_segments = []
         for seg in segments:
-            # Quick check: does this segment contain kana?
-            has_kana = any(0x3040 <= ord(c) <= 0x30FF for c in seg)
-            has_hanzi = any(0x4E00 <= ord(c) <= 0x9FFF for c in seg)
-            
-            # Only apply kakasi if segment has kana (indicator of Japanese)
-            # and is not predominantly Chinese
-            if has_kana:
-                # This is likely Japanese - convert any kanji to kana
-                seg_conv = self._convert_ja_kanji_to_kana(seg)
-                if seg_conv != seg:
-                    print(f"[JA-KANA] {seg[:15]:15} → {seg_conv[:15]:15}")
-                processed_segments.append(seg_conv)
-            else:
-                # No kana: either Chinese, English, or other
-                # Don't process with kakasi
-                processed_segments.append(seg)
-        
-        segments = processed_segments
+            lang = seg["lang"]
+            seg_text = seg["text"].strip()
+            if lang == 'ja':
+                seg_conv = self._convert_ja_kanji_to_kana(seg_text)
+                if seg_conv != seg_text:
+                    print(f"[JA-KANA] {seg_text[:15]:15} → {seg_conv[:15]:15}")
+                seg_text = seg_conv
+            processed_segments.append({"text": seg_text, "lang": lang})
+
         parts = []
-        for seg in segments:
-            lang = self._detect_lang(seg)
-            
-            if lang == 'zh':
-                # Already Chinese: convert traditional to simplified
-                seg_simp = self.trad_to_simp.convert(seg)
-                # Jieba split directly
+        for seg in processed_segments:
+            lang = seg["lang"]
+            seg_text = seg["text"]
+            if lang in ['zh', 'zh-tw']:
+                # Native Chinese: simp + [原]
+                seg_simp = self.trad_to_simp.convert(seg_text)
                 words = [w for w in jieba.lcut(seg_simp) if w.strip()]
                 hl_words = ''.join(f'[HL{w}]' for w in words)
-                # Use special [原] tag for native Chinese to show originality
                 parts.append(f'[原]{hl_words}[/原]')
             else:
-                # Non-Chinese: translate to Chinese
-                zh = self._translate_to_chinese(seg, lang)
-                
-                # Jieba tokenize the (translated) Chinese
+                # Translate to Chinese, then [lang]
+                zh = self._translate_to_chinese(seg_text, lang)
                 words = [w for w in jieba.lcut(zh) if w.strip()]
                 hl_words = ''.join(f'[HL{w}]' for w in words)
-                
-                # Wrap in language block
                 parts.append(f'[{lang}]{hl_words}[/{lang}]')
         
         return ''.join(parts)
@@ -543,3 +584,27 @@ if __name__ == '__main__':
     print(f"Final: {final_cont}")
     dec_cont = tokenizer.decode(final_cont)
     print(f"Decode: {dec_cont}")
+
+    print("\n=== Test Code-Switch 1 ===")
+    cs1 = "I went to 銀行 to check my 残高"
+    print(f"CS1 input: {cs1}")
+    encoded_cs1 = tokenizer.encode_full(cs1)
+    print(f"Encoded: {encoded_cs1}")
+    decoded_cs1 = tokenizer.decode(encoded_cs1)
+    print(f"Decode roundtrip: {decoded_cs1}")
+
+    print("\n=== Test Code-Switch 2 ===")
+    cs2 = "去銀行 check balance"
+    print(f"CS2 input: {cs2}")
+    encoded_cs2 = tokenizer.encode_full(cs2)
+    print(f"Encoded: {encoded_cs2}")
+    decoded_cs2 = tokenizer.decode(encoded_cs2)
+    print(f"Decode roundtrip: {decoded_cs2}")
+
+    print("\n=== Test Code-Switch 3 ===")
+    cs3 = "Hello 先生、こんにちは銀行"
+    print(f"CS3 input: {cs3}")
+    encoded_cs3 = tokenizer.encode_full(cs3)
+    print(f"Encoded: {encoded_cs3}")
+    decoded_cs3 = tokenizer.decode(encoded_cs3)
+    print(f"Decode roundtrip: {decoded_cs3}")
