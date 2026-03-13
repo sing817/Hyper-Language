@@ -7,8 +7,6 @@ Cross-language semantic compression via Chinese-pivot shared vocabulary. Boost L
 
 ## 🔥 Design Essence
 **Cross-Language Vocabulary Sharing** (中文樞紐共享):
-- **Zh Pivot Vocab**: Chinese → `[HL你好]` (lossless, zero-cost).
-- **Variants**: Non-Zh → `[HL你好:en]` (shared pivot, decode to orig/fallback).
 
 **Decode Table v5.1** (lang-block bare HL):
 | Format                       | Decode (orig lang / zh fallback) |
@@ -17,7 +15,6 @@ Cross-language semantic compression via Chinese-pivot shared vocabulary. Boost L
 | `[en][HL你好][HL世界][/en]`  | `Hello World` / 你好世界        |
 | `[ja][HL你好][HL世界][/ja]`  | `こんにちは世界` / 你好世界     |
 
-**Core Compression**: Shared HL IDs (Zh pivot >50% efficiency), low PPL via semantic abstraction.
 
 **Example v5.1**:
 ```
