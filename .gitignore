@@ -37,3 +37,12 @@ MANIFEST
 # IDE
 .vscode/
 .idea/
+
+# API Keys & Secrets
+.api_keys.json
+.tokens.json
+*.key
+*.secret
+.env
+.env.local
+~/.openclaw/secrets/

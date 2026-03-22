@@ -5,3 +5,4 @@ langdetect
 tqdm
 opencc
 pykakasi
+openai

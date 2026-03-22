@@ -8,7 +8,6 @@ import pykakasi
 import os
 import openai
 import json
-from token_manager import TokenManager
 
 class HLTokenizer:
     def __init__(self):
@@ -32,7 +31,7 @@ class HLTokenizer:
         }
         self.llm_client = None
         self.tag_cache = {}
-        print("Hyper-Language Tokenizer v5.5: LLM-based language tagging with Grok (xAI). [lang][HLw]... Punct retained, optimized gen, strict decode.")
+        print("Hyper-Language Tokenizer v5.4: LLM-based language tagging with Qwen (fallback to heuristics). [lang][HLw]... Punct retained, optimized gen, strict decode.")
         print(f"Using NLLB model: {self.model_name} on {self.device}")
 
     def _load_nllb(self):
@@ -176,27 +175,12 @@ class HLTokenizer:
         return segments
 
     def _init_llm(self):
-        """Initialize Grok LLM client via xAI API with token manager."""
+        """Initialize the LLM client lazily."""
         if self.llm_client is None:
-            # Load tokens from hidden file or environment
-            grok_config = TokenManager.get_grok_config()
-            api_key = grok_config.get('api_key')
-            
-            if not api_key:
-                raise ValueError(
-                    "Grok API key not found. Set it via:\n"
-                    "  1. Run: python token_manager.py setup\n"
-                    "  2. Or set GROK_API_KEY environment variable\n"
-                    "  3. Or add to ~/.openclaw/secrets/.api_keys.json"
-                )
-            
-            endpoint = grok_config.get('endpoint', 'https://api.x.ai/v1')
-            
             self.llm_client = openai.OpenAI(
-                base_url=endpoint,
-                api_key=api_key
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key=os.getenv("DASHSCOPE_API_KEY")
             )
-            print(f"✓ Grok LLM client initialized (endpoint: {endpoint})")
 
     def _llm_language_tag(self, text: str) -> dict:
         """Use LLM to tag language segments. Cache results."""
@@ -205,91 +189,36 @@ class HLTokenizer:
 
         self._init_llm()
 
-        prompt = """You are a highly accurate multilingual language tagging expert specializing in code-switched and mixed-language sentences (especially Japanese Kanji mixed with English or Chinese).
+        prompt = '''You are a highly accurate multilingual language tagging expert. Your task is to identify continuous segments of different languages in the input text, even in code-switched sentences.
 
-Your ONLY task is to tag every word/phrase with its correct language.
+Rules:
+- Segment into minimal continuous blocks where each block is predominantly one language.
+- Use 2-letter ISO codes: 'en' English, 'zh' Chinese (simplified/traditional), 'ja' Japanese, 'ko' Korean, 'fr' French, 'es' Spanish, 'de' German, etc. Use 'zh' for all Chinese.
+- Do not split within words or phrases of the same language. Keep punctuation with the segment.
+- Preserve exact original text in "text" field.
+- Output ONLY valid JSON object: {"segments": [{"text": "exact segment text", "lang": "lang_code"}, ...]} 
 
-Output EXACTLY this JSON structure and NOTHING ELSE (no explanation, no extra text):
+Examples:
+"I went to 銀行 to check my 残高" -> {"segments": [{"text": "I went to ", "lang": "en"}, {"text": "銀行", "lang": "zh"}, {"text": " to check my ", "lang": "en"}, {"text": "残高", "lang": "zh"}]}
+"去銀行 check balance" -> {"segments": [{"text": "去銀行 ", "lang": "zh"}, {"text": "check balance", "lang": "en"}]}
+"Hello 先生、こんにちは銀行" -> {"segments": [{"text": "Hello ", "lang": "en"}, {"text": "先生", "lang": "zh"}, {"text": "、", "lang": "ja"}, {"text": "こんにちは", "lang": "ja"}, {"text": "銀行", "lang": "zh"}]}} 
 
-{{
-"tagged_text": "The original input text unchanged, but every language segment wrapped like [en]text[/en] or [ja]text[/ja]",
-"segments": [
-{{"text": "exact original substring", "lang": "en"}},
-{{"text": "exact original substring", "lang": "ja"}},
-...
-]
-}}
-
-Language code rules (use ISO 639-1):
-
-en: English
-ja: Japanese (Hiragana, Katakana, AND Kanji when context shows Japanese — e.g. particles は/が/を, sentence structure, or English pairing)
-zh: Chinese (Simplified or Traditional)
-zh-tw: ONLY if clearly native Traditional Chinese context (rarely used)
-Other languages: fr, de, ko, es, etc.
-
-Critical rules:
-
-For Japanese Kanji (e.g. 銀行, 先生, 残高), decide ja vs zh based on SURROUNDING CONTEXT — never guess by character alone.
-Proper nouns, names, places: tag according to most likely origin from context.
-Never translate, never modify the text content, never add words.
-Handle intra-sentence mixing perfectly.
-
-Few-shot examples:
-
-Input: "I went to 銀行 to check my 残高"
-Output: {{
-"tagged_text": "[en]I went to [/en][ja]銀行[/ja][en] to check my [/en][ja]残高[/ja]",
-"segments": [
-{{"text": "I went to ", "lang": "en"}},
-{{"text": "銀行", "lang": "ja"}},
-{{"text": " to check my ", "lang": "en"}},
-{{"text": "残高", "lang": "ja"}}
-]
-}}
-
-Input: "去銀行 check balance"
-Output: {{
-"tagged_text": "[zh]去銀行[/zh][en] check balance[/en]",
-"segments": [
-{{"text": "去銀行", "lang": "zh"}},
-{{"text": " check balance", "lang": "en"}}
-]
-}}
-
-Input: "Hello 先生、こんにちは銀行"
-Output: {{
-"tagged_text": "[en]Hello [/en][ja]先生[/ja]、[ja]こんにちは銀行[/ja]",
-"segments": [
-{{"text": "Hello ", "lang": "en"}},
-{{"text": "先生", "lang": "ja"}},
-{{"text": "、", "lang": "ja"}},
-{{"text": "こんにちは銀行", "lang": "ja"}}
-]
-}}
-
-Now process this exact text: "{}"
-""".format(text)
+Now process this exact text: "{}"'''.format(text)
 
         try:
-            # Get model from config
-            grok_config = TokenManager.get_grok_config()
-            model = grok_config.get('model', 'grok-4-1-fast-reasoning')
-            
             response = self.llm_client.chat.completions.create(
-                model=model,
+                model="qwen-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
             content = response.choices[0].message.content.strip()
             result = json.loads(content)
             self.tag_cache[text] = result
-            print(f"[LLM-TAG-GROK] Successfully tagged text with {len(result['segments'])} segments")
             return result
         except Exception as e:
-            print(f"[LLM-ERR-GROK] {str(e)[:100]} → Fallback to heuristic.")
+            print(f"[LLM-ERR] {str(e)} Fallback to heuristic.")
             seg_texts = self.lang_segments(text)
-            fallback = {"segments": [{"text": seg.strip(), "lang": self._detect_lang(seg)} for seg in seg_texts]}
+            fallback = {"segments": [{"text": seg, "lang": self._detect_lang(seg)} for seg in seg_texts]}
             self.tag_cache[text] = fallback
             return fallback
     
