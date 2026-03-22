@@ -1,8 +1,22 @@
 # Hyper-Language Tokenizer (HL Tokenizer v5.3)
 
+## 💡 Core Concept & Motivation (Original Idea: 2025-05-10)
+
+**起源** (2025年5月10日)：我注意到/設想一種"hyper language" (簡稱HL)，並假設它是一種信息密度最高的文本，是否可以先將其他語言轉換成HL再學習以提高訓練效率？想法由來是我觀察到中文每個token比英文信息密度高，可能直接影響機器學習總體訓練效率。
+
+來源確保原創性：https://www.threads.com/@singwan0/post/DJecTKDziII
+
+**實現**：用單一語言（中文，因為信息密度高）作為pivot整合知識，解決多語言tokenizer層貫通問題。用簡體中文作為HL base純粹因為中文信息密度高。
+
+所有語言單次編碼壓成 [lang][HL中文詞][/lang]：
+- 英文/日文 → 翻譯成簡體中文 + tag
+- 原生中文 → [原] 標記 + 簡化
+- 保留lossless decode
+- 目標：密度極致 + 樹狀結構可parse + 跨語言貫通學習
+
 **Innovation**: Direct multilingual-to-Chinese token conversion in **one encoding step**. All languages compressed to dense Chinese HL tokens with language metadata for lossless decoding.
 
-## 💡 Core Concept
+## � Core Concept
 
 **Cross-Language Vocabulary Sharing via Chinese Pivot**: Chinese tokens carry higher information density than most languages. Hyper-Language converts all input to Chinese tokens while preserving original language information through metadata tags.
 
@@ -14,7 +28,7 @@ Output: [en][HL你好][/en][原][HL你好][HL世界][/原][ja][HL你好][/ja]
         (All converted to Chinese + language tags for lossless decode)
 ```
 
-## 🔥 v5.3 Enhancements
+## �🔥 v5.3 Enhancements
 
 ### 1. **Smart Script-Family Segmentation**
 Automatic separation without punctuation:

@@ -287,11 +287,8 @@ Now process this exact text: "{}"
             print(f"[LLM-TAG-GROK] Successfully tagged text with {len(result['segments'])} segments")
             return result
         except Exception as e:
-            print(f"[LLM-ERR-GROK] {str(e)[:100]} → Fallback to heuristic.")
-            seg_texts = self.lang_segments(text)
-            fallback = {"segments": [{"text": seg.strip(), "lang": self._detect_lang(seg)} for seg in seg_texts]}
-            self.tag_cache[text] = fallback
-            return fallback
+            print(f"[LLM-ERR-GROK] {str(e)[:100]} → No fallback, raising error.")
+            raise e
     
     def _convert_ja_kanji_to_kana(self, text: str) -> str:
         """Convert Japanese kanji to hiragana using kakasi.
@@ -309,31 +306,16 @@ Now process this exact text: "{}"
             return text
 
     def encode(self, text: str) -> str:
-        """Encode: LLM-based (or heuristic) language segments → translate to Chinese → jieba → HL tokens.
+        """Encode: LLM-based language segments → translate to Chinese → jieba → HL tokens.
         
         All output is Chinese HL tokens grouped by source language (with language wrapper).
         Native Chinese (zh, zh-tw) → [原]...[/原]; others → [lang]...[/lang].
-        Japanese: kanji to kana before translate.
         """
-        text_stripped_len = len(text.strip())
-        if text_stripped_len < 3:
-            seg_texts = self.lang_segments(text)
-            segments = [{"text": seg.strip(), "lang": self._detect_lang(seg)} for seg in seg_texts]
-        else:
-            tagging = self._llm_language_tag(text)
-            segments = tagging["segments"]
+        tagging = self._llm_language_tag(text)
+        segments = tagging["segments"]
 
-        # Pre-process Japanese segments
-        processed_segments = []
-        for seg in segments:
-            lang = seg["lang"]
-            seg_text = seg["text"].strip()
-            if lang == 'ja':
-                seg_conv = self._convert_ja_kanji_to_kana(seg_text)
-                if seg_conv != seg_text:
-                    print(f"[JA-KANA] {seg_text[:15]:15} → {seg_conv[:15]:15}")
-                seg_text = seg_conv
-            processed_segments.append({"text": seg_text, "lang": lang})
+        # Pre-process segments (no pykakasi)
+        processed_segments = [{"text": seg["text"].strip(), "lang": seg["lang"]} for seg in segments]
 
         parts = []
         for seg in processed_segments:
