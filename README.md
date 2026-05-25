@@ -1,4 +1,16 @@
-# Hyper-Language Tokenizer (HL Tokenizer v5.3)
+# ⚠️ 已放棄 (Abandoned) — Hyper-Language Tokenizer
+
+**這個專案已經停止開發並正式放棄。**
+
+保留此儲存庫僅作為歷史探索記錄，**不建議用於任何實際用途**。
+
+詳細說明請閱讀：[ARCHIVED.md](ARCHIVED.md)
+
+---
+
+# Hyper-Language Tokenizer (HL Tokenizer v5.3) [歷史文件]
+
+> **注意**：以下為原始專案文件，已不再維護。內容僅供歷史參考。
 
 ## 💡 Core Concept & Motivation (Original Idea: 2025-05-10)
 
@@ -206,6 +218,10 @@ python3 test_encode_v2.py         # Main example
 python3 test_comprehensive.py     # All language combos
 python3 test_roundtrip.py         # Encode-decode verification
 python3 test_segments.py          # Segmentation only (no NLLB needed)
+
+# Utility verification (NEW - measures real-world effectiveness)
+python3 test_utility.py           # Compression ratio, roundtrip accuracy, latency
+# Requires: Grok API key (run `python token_manager.py setup` first)
 
 # Use in code
 from hl_tokenizer import HLTokenizer
